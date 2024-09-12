@@ -7,15 +7,44 @@ from scipy.spatial import Delaunay, ConvexHull
 from pathlib import Path
 
 class Processing:
-    def __init__(self, file, points=1000):
+    def __init__(self, file, texture=None, crop=False, points=1000):
         self.file = file
+        self.texture = texture
+        self.crop = crop
         self.points = points
 
     def to_ply(self):
         return o3d.io.read_triangle_mesh(self.file).sample_points_uniformly(number_of_points=self.points) if self.file.lower().endswith('.obj') else 'Incorrect File'
 
-    def save(self):
+    def save_ply(self):
         o3d.io.write_point_cloud(Path(self.file).stem + str('_saved.ply'), self.to_ply())
+
+    def render_obj(self):
+        mesh = o3d.io.read_triangle_mesh(self.file)
+        # mesh.material = o3d.io.read_mtl(self.texture)
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+
+        if self.crop:
+            vis = o3d.visualization.Visualizer()
+            vis.create_window()
+            vis.add_geometry(mesh)
+            vis.update_renderer()
+            vis.poll_events()
+            vis.capture_screen_image(Path(self.file).stem + str('_obj.png'))
+            vis.destroy_window()
+
+            ctr = vis.get_view_control()
+            ctr.rotate(45.0, 450.0)
+            vis.update_renderer()
+
+        else:
+            # vis.get_render_option().load_from_json("viewpoint.json")
+            vis.run()
+            vis.destroy_window()
+
+    def plot_obj(self):
+        if self.file.lower().endswith('.obj'): self.render_obj()
 
 
 class Volumetric:
@@ -42,20 +71,20 @@ class Volumetric:
 
 
 class Trait:
-    def __init__(self, file, step=0.01, default=False, save=False, gpu=False):
+    def __init__(self, file, step=0.01, default=False, crop=False, gpu=False):
         self.file = file
         self.pcd = self.extract()
         self.radius = self.get_radius()[0]
         self.gpu = gpu
         self.step = step
-        self.save = save
+        self.crop = crop
         self.default = default
         self.device = torch.device("cuda") if self.gpu and torch.cuda.is_available() else torch.device("cpu")
 
     def extract(self):
         return o3d.io.read_point_cloud(str(self.file)) if self.file.lower().endswith('.ply')  else 'Incorrect File'
 
-    def render(self):
+    def render_ply(self):
         aabb = self.pcd.get_axis_aligned_bounding_box()
         aabb.color = (1, 0, 0)
 
@@ -64,7 +93,7 @@ class Trait:
 
         frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.075)
 
-        if self.save:
+        if self.crop:
             self.pcd = self.forward()
             vis = o3d.visualization.Visualizer()
             vis.create_window()
@@ -89,18 +118,17 @@ class Trait:
             o3d.visualization.draw_geometries([self.pcd, aabb, frame])
             #o3d.visualization.draw_geometries([self.pcd])
 
-    def plot(self):
+    def plot_ply(self):
         if len(self.pcd.points) == 0:
             print('Not Enough Points')
         else:
-            self.render()
+            self.render_ply()
 
     def get_radius(self):
         distances = np.linalg.norm(np.asarray(self.pcd.points) - self.pcd.get_center(), axis=1)
         return [np.min(distances), np.max(distances), np.mean(distances), np.std(distances)]
 
     def forward(self):
-
         started = time.time()
 
         # array to numpy and push to device
@@ -142,8 +170,20 @@ class Trait:
 
         return segments_o3d
 
-    def get_optimal_radius(self):
+    def min(self):
+        # lowest point
+        return [np.min(np.asarray(self.pcd.points)[:, 2]), np.argmin(np.asarray(self.pcd.points)[:, 2])]
 
+    def max(self):
+        # highest point
+        return [np.max(np.asarray(self.pcd.points)[:, 2]), np.argmax(np.asarray(self.pcd.points)[:, 2])]
+
+    def distance(self):
+        # from lowest to highest point
+        return np.linalg.norm(np.asarray(self.pcd.points)[self.max()[1]] -
+                              np.asarray(self.pcd.points)[self.min()[1]]) * 100
+
+    def get_optimal_radius(self):
         # searching interval
         radii = np.arange(self.get_radius()[0], self.get_radius()[1] + self.step, self.step)
         clusters = []
@@ -156,3 +196,4 @@ class Trait:
             print([radii[np.argmin(clusters)], min(clusters), max(clusters), np.mean(clusters), np.std(clusters)])
 
         return [radii[np.argmin(clusters)], min(clusters), max(clusters), np.mean(clusters), np.std(clusters)]
+
